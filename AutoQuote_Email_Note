@@ -1,0 +1,107 @@
+public class AutoQuote_Email_Note {
+    
+    public static void adobeSignEmailNotify(Opportunity oppty){
+        if (oppty.Admin_Contact__c != Null){
+            
+            // Set variables for the admin contact's id and their name
+            Id adminContactId = oppty.Admin_Contact__c;
+            String adminContactName = [SELECT Name FROM Contact WHERE Id = :adminContactId].Name;
+            
+            // Use the opportunity's account id to query for non-disabled superusers and exclude the admin contact -- they will receive a different email
+            List<Contact> superAdmins = [SELECT Id, Name
+                                         FROM Contact 
+                                         WHERE AccountId = :oppty.AccountId AND Superadmin__c = true AND Disabled_User__c = false AND Id <> :adminContactId AND HasOptedOutOfEmail = false AND DoNotCall = false];
+            
+            // Create a list of super admin IDs and a string of their names separated by commas
+            List<Id> superAdminList = new List<Id>();
+            List<String> superAdminNames = new List<String>();
+            for (Contact c : superAdmins){
+                superAdminNames.add(c.Name);
+                superAdminList.add(c.Id);
+            }
+            String superAdminString = String.join(superAdminList,', ');
+            
+            // Instantiate a list for errors
+            List<String> errs = new List<String>();
+            
+            // If there are super admins on the account
+            if (superAdminList.size() != 0){
+           
+                // Create a list of oppty ids that is the same length as the super admin list
+                List<Id> opptyIdList = new List<Id>();
+                for (Id i : superAdminList){opptyIdList.add(oppty.Id);}
+                
+                // Reserve space in the Mass Email queue
+                Messaging.reserveMassEmailCapacity(1);
+                
+                // Create a new Mass Email and set the target object ids to by the super admins and the what 
+                // ids to be the list of opptys. 
+                Messaging.MassEmailMessage mail = new Messaging.MassEmailMessage();
+                mail.setTargetObjectIds(superAdminList);
+                mail.setWhatIds(opptyIdList);
+                // Set the template to the one intended for admins who did not receive the quote.
+                // ****** template ID hardcoded -- only exists in production
+                mail.setTemplateId('00X41000001ZrtO');
+                // Do not post an activity for each email sent in the mass email 
+                mail.setSaveAsActivity(false);
+                
+                // Attempt to send the mass email. If there is an exception, take its error message and add it to the error message list.
+                try{
+                    List<Messaging.SendEmailResult> massResult = Messaging.sendEmail(new Messaging.MassEmailMessage[] { mail });
+                }   
+                catch(System.EmailException e){
+                    errs.add(e.getMessage());
+                }
+                
+            }
+            
+            // Reserve a space in the email queue for a Single Email message and instantiate the message
+            Messaging.reserveSingleEmailCapacity(1);
+            Messaging.SingleEmailMessage mailAdmin = new Messaging.SingleEmailMessage();
+            
+            // Set the target object to the admin contact on the opportunity and the what id to the opportunity
+            mailAdmin.setTargetObjectId(adminContactId);
+            mailAdmin.setWhatId(oppty.Id);
+            // Set the template to be the one intended for the admin who will receive the quote
+            // ****** template ID hardcoded -- only exists in production
+            mailAdmin.setTemplateId('00X41000001ZtPQ');
+            // Do not post an activity for the email
+            mailAdmin.setSaveAsActivity(false);
+            
+            // Attempt to send the mass email. If there is an exception, take its error message and add it to the error message list.
+            try{
+                List<Messaging.SendEmailResult> singleResult = Messaging.sendEmail(new Messaging.SingleEmailMessage[] { mailAdmin });
+            }
+            catch (System.EmailException e) {
+                errs.add(e.getMessage());
+            }
+            
+            // Create a new task for the error/success messages
+            Task tsk = new Task();           
+            tsk.WhatId = oppty.id;
+            tsk.WhoId = oppty.Admin_Contact__c;
+            tsk.OwnerId = oppty.OwnerId;
+            tsk.ActivityDate = Date.today();
+            
+            // if there are any errors, post a concatenated error message to the opportunity
+            if (errs.size() > 0){
+                String errMessage = 'Error Message(s): ';
+                errMessage += String.join(errs, ' ; ');
+                tsk.Subject = 'Error: Problem Sending Automated Quote Email Notification';
+                tsk.priority= 'High';
+                tsk.status = 'Not Started';
+                tsk.description = errMessage;            
+            }
+            
+            // if there were no errors post a message stating who the recipients were and who received the quote.
+            else {
+                tsk.Subject = 'Success: Automated Quote Email Notification Sent';
+                tsk.priority= 'Low';
+                tsk.status = 'Completed';
+                tsk.description = 'Automated Quote Mass Email Notification Recipients: ' + superAdminString + '. Quote Sent to: ' + adminContactName;
+            }
+            
+            insert tsk;        
+        }
+    }
+}
