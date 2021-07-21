@@ -1,0 +1,13 @@
+trigger EmailNote_AutoQuote on Opportunity (after update) {
+    for (Opportunity oppty : Trigger.new ) {
+        
+        // Compare the new and old booleans
+        Boolean newProcessed = Trigger.newMap.get(oppty.Id).AutoRenewalProcessed__c;
+        Boolean oldProcessed = Trigger.oldMap.get(oppty.Id).AutoRenewalProcessed__c;
+        Boolean newNotSent = Trigger.newMap.get(oppty.Id).AutoRenewalNotSent__c ;
+        
+        if(oldProcessed != newProcessed && !newNotSent && newProcessed){
+            AutoQuote_Email_Note.adobeSignEmailNotify(oppty);
+        }
+    }
+}
